@@ -309,10 +309,11 @@ class ContractContract(models.Model):
             if date_end and all(date_end):
                 contract.date_end = max(date_end)
 
+    # pylint: disable=missing-return
     @api.depends(
         "contract_line_ids.recurring_next_date",
         "contract_line_ids.is_canceled",
-    )  # pylint: disable=missing-return
+    )
     def _compute_recurring_next_date(self):
         for contract in self:
             recurring_next_date = contract.contract_line_ids.filtered(
@@ -442,6 +443,8 @@ class ContractContract(models.Model):
             move_form.invoice_payment_term_id = self.payment_term_id
         if self.fiscal_position_id:
             move_form.fiscal_position_id = self.fiscal_position_id
+        if invoice_type == "out_invoice" and self.user_id:
+            move_form.invoice_user_id = self.user_id
         invoice_vals = move_form._values_to_save(all_fields=True)
         invoice_vals.update(
             {
@@ -451,7 +454,6 @@ class ContractContract(models.Model):
                 "invoice_date": date_invoice,
                 "journal_id": journal.id,
                 "invoice_origin": self.name,
-                "invoice_user_id": self.user_id.id,
             }
         )
         return invoice_vals, move_form
@@ -603,9 +605,28 @@ class ContractContract(models.Model):
                     partner_ids=partner_ids.ids
                 )
 
+    @api.model
+    def _add_contract_origin(self, invoices):
+        for item in self:
+            for move in invoices & item._get_related_invoices():
+                move.message_post(
+                    body=(
+                        _(
+                            (
+                                "%(msg)s by contract <a href=# data-oe-model=contract.contract"
+                                " data-oe-id=%(contract_id)d>%(contract)s</a>."
+                            ),
+                            msg=move._creation_message(),
+                            contract_id=item.id,
+                            contract=item.display_name,
+                        )
+                    )
+                )
+
     def _recurring_create_invoice(self, date_ref=False):
         invoices_values = self._prepare_recurring_invoices_values(date_ref)
         moves = self.env["account.move"].create(invoices_values)
+        self._add_contract_origin(moves)
         self._invoice_followers(moves)
         self._compute_recurring_next_date()
         return moves
